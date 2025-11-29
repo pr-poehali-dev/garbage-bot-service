@@ -10,8 +10,11 @@ import os
 import psycopg2
 from typing import Dict, Any, Optional, List
 from datetime import datetime
+from threading import local
 
 TELEGRAM_API = "https://api.telegram.org/bot{token}/{method}"
+
+_context = local()
 
 ORDER_STATUSES = {
     'searching_courier': '🔍 В поиске курьера',
@@ -45,6 +48,64 @@ def send_message(chat_id: int, text: str, reply_markup: Optional[Dict] = None) -
         headers={'Content-Type': 'application/json'}
     )
     urllib.request.urlopen(req)
+
+def edit_message(chat_id: int, message_id: int, text: str, reply_markup: Optional[Dict] = None) -> None:
+    token = os.environ.get('TELEGRAM_BOT_TOKEN')
+    url = TELEGRAM_API.format(token=token, method='editMessageText')
+    
+    payload = {
+        'chat_id': chat_id,
+        'message_id': message_id,
+        'text': text,
+        'parse_mode': 'HTML'
+    }
+    
+    if reply_markup:
+        payload['reply_markup'] = json.dumps(reply_markup)
+    
+    import urllib.request
+    try:
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode('utf-8'),
+            headers={'Content-Type': 'application/json'}
+        )
+        urllib.request.urlopen(req)
+    except:
+        pass
+
+def send_or_edit_message(chat_id: int, text: str, reply_markup: Optional[Dict] = None, message_id: Optional[int] = None) -> None:
+    if message_id:
+        edit_message(chat_id, message_id, text, reply_markup)
+    else:
+        send_message(chat_id, text, reply_markup)
+
+def smart_send_message(chat_id: int, text: str, reply_markup: Optional[Dict] = None) -> None:
+    message_id = getattr(_context, 'message_id', None)
+    if message_id:
+        edit_message(chat_id, message_id, text, reply_markup)
+    else:
+        send_message(chat_id, text, reply_markup)
+
+def delete_message(chat_id: int, message_id: int) -> None:
+    token = os.environ.get('TELEGRAM_BOT_TOKEN')
+    url = TELEGRAM_API.format(token=token, method='deleteMessage')
+    
+    payload = {
+        'chat_id': chat_id,
+        'message_id': message_id
+    }
+    
+    import urllib.request
+    try:
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode('utf-8'),
+            headers={'Content-Type': 'application/json'}
+        )
+        urllib.request.urlopen(req)
+    except:
+        pass
 
 def check_user_role(telegram_id: int, conn) -> str:
     cursor = conn.cursor()
@@ -172,7 +233,7 @@ def handle_start(chat_id: int, telegram_id: int, username: str, first_name: str,
             "Выберите действие:"
         )
     
-    send_message(chat_id, welcome_text, get_main_menu_keyboard(role))
+    smart_send_message(chat_id, welcome_text, get_main_menu_keyboard(role))
 
 def handle_apply_courier(chat_id: int, telegram_id: int, conn) -> None:
     cursor = conn.cursor()
@@ -187,7 +248,7 @@ def handle_apply_courier(chat_id: int, telegram_id: int, conn) -> None:
         text = "⏳ Ваша заявка на рассмотрении. Ожидайте одобрения администратора."
         cursor.close()
         keyboard = {'inline_keyboard': [[{'text': '⬅️ Назад', 'callback_data': 'start'}]]}
-        send_message(chat_id, text, keyboard)
+        smart_send_message(chat_id, text, keyboard)
         return
     
     cursor.execute(
@@ -202,11 +263,11 @@ def handle_apply_courier(chat_id: int, telegram_id: int, conn) -> None:
         "Администратор рассмотрит её в ближайшее время."
     )
     keyboard = {'inline_keyboard': [[{'text': '⬅️ Назад', 'callback_data': 'start'}]]}
-    send_message(chat_id, text, keyboard)
+    smart_send_message(chat_id, text, keyboard)
 
 def handle_client_menu(chat_id: int) -> None:
     text = "👤 <b>Меню клиента</b>\n\nВыберите действие:"
-    send_message(chat_id, text, get_client_menu_keyboard())
+    smart_send_message(chat_id, text, get_client_menu_keyboard())
 
 def handle_courier_available_orders(chat_id: int, telegram_id: int, conn) -> None:
     cursor = conn.cursor()
@@ -220,7 +281,7 @@ def handle_courier_available_orders(chat_id: int, telegram_id: int, conn) -> Non
     if not orders:
         text = "📦 <b>Доступные заказы</b>\n\nНет доступных заказов"
         keyboard = {'inline_keyboard': [[{'text': '⬅️ Назад', 'callback_data': 'start'}]]}
-        send_message(chat_id, text, keyboard)
+        smart_send_message(chat_id, text, keyboard)
         return
     
     text = "📦 <b>Доступные заказы</b>\n\n"
@@ -264,7 +325,7 @@ def handle_accept_order(chat_id: int, telegram_id: int, order_id: int, conn) -> 
             [{'text': '⬅️ Назад', 'callback_data': 'start'}]
         ]
     }
-    send_message(chat_id, text, keyboard)
+    smart_send_message(chat_id, text, keyboard)
 
 def handle_courier_current_orders(chat_id: int, telegram_id: int, conn) -> None:
     cursor = conn.cursor()
@@ -278,7 +339,7 @@ def handle_courier_current_orders(chat_id: int, telegram_id: int, conn) -> None:
     if not orders:
         text = "🚚 <b>Текущие заказы</b>\n\nНет текущих заказов"
         keyboard = {'inline_keyboard': [[{'text': '⬅️ Назад', 'callback_data': 'start'}]]}
-        send_message(chat_id, text, keyboard)
+        smart_send_message(chat_id, text, keyboard)
         return
     
     text = "🚚 <b>Текущие заказы</b>\n\n"
@@ -319,7 +380,7 @@ def handle_start_work(chat_id: int, telegram_id: int, order_id: int, conn) -> No
             [{'text': '⬅️ Назад', 'callback_data': 'courier_current'}]
         ]
     }
-    send_message(chat_id, text, keyboard)
+    smart_send_message(chat_id, text, keyboard)
 
 def handle_complete_order(chat_id: int, telegram_id: int, order_id: int, conn) -> None:
     cursor = conn.cursor()
@@ -359,7 +420,7 @@ def handle_complete_order(chat_id: int, telegram_id: int, order_id: int, conn) -
             [{'text': '⬅️ Назад', 'callback_data': 'start'}]
         ]
     }
-    send_message(chat_id, text, keyboard)
+    smart_send_message(chat_id, text, keyboard)
 
 def handle_courier_stats(chat_id: int, telegram_id: int, conn) -> None:
     cursor = conn.cursor()
@@ -397,7 +458,7 @@ def handle_courier_stats(chat_id: int, telegram_id: int, conn) -> None:
             [{'text': '⬅️ Назад', 'callback_data': 'start'}]
         ]
     }
-    send_message(chat_id, text, keyboard)
+    smart_send_message(chat_id, text, keyboard)
 
 def handle_reviews(chat_id: int, conn) -> None:
     cursor = conn.cursor()
@@ -422,7 +483,7 @@ def handle_reviews(chat_id: int, conn) -> None:
             text += "\n"
     
     keyboard = {'inline_keyboard': [[{'text': '⬅️ Назад', 'callback_data': 'start'}]]}
-    send_message(chat_id, text, keyboard)
+    smart_send_message(chat_id, text, keyboard)
 
 def handle_client_new_order(chat_id: int) -> None:
     text = (
@@ -438,7 +499,7 @@ def handle_client_new_order(chat_id: int) -> None:
     )
     
     keyboard = {'inline_keyboard': [[{'text': '⬅️ Отмена', 'callback_data': 'client_menu'}]]}
-    send_message(chat_id, text, keyboard)
+    smart_send_message(chat_id, text, keyboard)
 
 def handle_client_active_orders(chat_id: int, telegram_id: int, conn) -> None:
     cursor = conn.cursor()
@@ -478,7 +539,7 @@ def handle_client_active_orders(chat_id: int, telegram_id: int, conn) -> None:
         keyboard_buttons.append([{'text': '⬅️ Назад', 'callback_data': 'client_menu'}])
         keyboard = {'inline_keyboard': keyboard_buttons}
     
-    send_message(chat_id, text, keyboard)
+    smart_send_message(chat_id, text, keyboard)
 
 def handle_operator_active_orders(chat_id: int, conn) -> None:
     cursor = conn.cursor()
@@ -519,7 +580,7 @@ def handle_operator_active_orders(chat_id: int, conn) -> None:
         keyboard_buttons.append([{'text': '⬅️ Назад', 'callback_data': 'start'}])
         keyboard = {'inline_keyboard': keyboard_buttons}
     
-    send_message(chat_id, text, keyboard)
+    smart_send_message(chat_id, text, keyboard)
 
 def handle_operator_change_status(chat_id: int, order_id: int, conn) -> None:
     text = f"📝 Изменить статус заказа #{order_id}"
@@ -535,7 +596,7 @@ def handle_operator_change_status(chat_id: int, order_id: int, conn) -> None:
         ]
     }
     
-    send_message(chat_id, text, keyboard)
+    smart_send_message(chat_id, text, keyboard)
 
 def handle_set_order_status(chat_id: int, order_id: int, new_status: str, conn) -> None:
     cursor = conn.cursor()
@@ -567,7 +628,7 @@ def handle_set_order_status(chat_id: int, order_id: int, new_status: str, conn) 
         ]
     }
     
-    send_message(chat_id, text, keyboard)
+    smart_send_message(chat_id, text, keyboard)
 
 def handle_admin_panel(chat_id: int, conn) -> None:
     text = "👑 <b>Админ-панель</b>\n\nВыберите действие:"
@@ -582,7 +643,7 @@ def handle_admin_panel(chat_id: int, conn) -> None:
         ]
     }
     
-    send_message(chat_id, text, keyboard)
+    smart_send_message(chat_id, text, keyboard)
 
 def handle_admin_couriers_menu(chat_id: int, conn) -> None:
     cursor = conn.cursor()
@@ -613,7 +674,7 @@ def handle_admin_couriers_menu(chat_id: int, conn) -> None:
         ]
     }
     
-    send_message(chat_id, text, keyboard)
+    smart_send_message(chat_id, text, keyboard)
 
 def handle_admin_operators_menu(chat_id: int, conn) -> None:
     cursor = conn.cursor()
@@ -637,7 +698,7 @@ def handle_admin_operators_menu(chat_id: int, conn) -> None:
         ]
     }
     
-    send_message(chat_id, text, keyboard)
+    smart_send_message(chat_id, text, keyboard)
 
 def handle_admin_add_operator(chat_id: int) -> None:
     text = (
@@ -648,7 +709,7 @@ def handle_admin_add_operator(chat_id: int) -> None:
         "<code>operator_add 123456789</code>"
     )
     keyboard = {'inline_keyboard': [[{'text': '⬅️ Назад', 'callback_data': 'admin_operators'}]]}
-    send_message(chat_id, text, keyboard)
+    smart_send_message(chat_id, text, keyboard)
 
 def handle_admin_stats(chat_id: int, conn) -> None:
     cursor = conn.cursor()
@@ -694,7 +755,7 @@ def handle_admin_stats(chat_id: int, conn) -> None:
     )
     
     keyboard = {'inline_keyboard': [[{'text': '⬅️ Назад', 'callback_data': 'admin_panel'}]]}
-    send_message(chat_id, text, keyboard)
+    smart_send_message(chat_id, text, keyboard)
 
 def handle_admin_couriers_list(chat_id: int, conn) -> None:
     cursor = conn.cursor()
@@ -722,7 +783,7 @@ def handle_admin_couriers_list(chat_id: int, conn) -> None:
             text += f"Заказов: {orders} | Заработано: {earnings} ₽\n\n"
     
     keyboard = {'inline_keyboard': [[{'text': '⬅️ Назад', 'callback_data': 'admin_couriers'}]]}
-    send_message(chat_id, text, keyboard)
+    smart_send_message(chat_id, text, keyboard)
 
 def handle_admin_operators_list(chat_id: int, conn) -> None:
     cursor = conn.cursor()
@@ -747,7 +808,7 @@ def handle_admin_operators_list(chat_id: int, conn) -> None:
             text += f"Назначен: {date_str}\n\n"
     
     keyboard = {'inline_keyboard': [[{'text': '⬅️ Назад', 'callback_data': 'admin_operators'}]]}
-    send_message(chat_id, text, keyboard)
+    smart_send_message(chat_id, text, keyboard)
 
 def handle_admin_remove_courier_prompt(chat_id: int) -> None:
     text = (
@@ -759,7 +820,7 @@ def handle_admin_remove_courier_prompt(chat_id: int) -> None:
         "⚠️ Курьер потеряет доступ к заказам и будет переведён в статус клиента."
     )
     keyboard = {'inline_keyboard': [[{'text': '⬅️ Назад', 'callback_data': 'admin_couriers'}]]}
-    send_message(chat_id, text, keyboard)
+    smart_send_message(chat_id, text, keyboard)
 
 def handle_admin_remove_operator_prompt(chat_id: int) -> None:
     text = (
@@ -771,7 +832,7 @@ def handle_admin_remove_operator_prompt(chat_id: int) -> None:
         "⚠️ Оператор потеряет доступ к панели управления заказами."
     )
     keyboard = {'inline_keyboard': [[{'text': '⬅️ Назад', 'callback_data': 'admin_operators'}]]}
-    send_message(chat_id, text, keyboard)
+    smart_send_message(chat_id, text, keyboard)
 
 def handle_remove_courier(chat_id: int, courier_id: int, conn) -> None:
     cursor = conn.cursor()
@@ -866,7 +927,7 @@ def handle_client_history(chat_id: int, telegram_id: int, conn) -> None:
             text += "\n"
     
     keyboard = {'inline_keyboard': [[{'text': '⬅️ Назад', 'callback_data': 'client_menu'}]]}
-    send_message(chat_id, text, keyboard)
+    smart_send_message(chat_id, text, keyboard)
 
 def handle_courier_history(chat_id: int, telegram_id: int, conn) -> None:
     cursor = conn.cursor()
@@ -891,7 +952,7 @@ def handle_courier_history(chat_id: int, telegram_id: int, conn) -> None:
             text += f"💰 {price} ₽\n\n"
     
     keyboard = {'inline_keyboard': [[{'text': '⬅️ Назад', 'callback_data': 'start'}]]}
-    send_message(chat_id, text, keyboard)
+    smart_send_message(chat_id, text, keyboard)
 
 def handle_client_payment(chat_id: int) -> None:
     text = (
@@ -903,7 +964,7 @@ def handle_client_payment(chat_id: int) -> None:
         "Способ оплаты выбирается при согласовании заказа с курьером."
     )
     keyboard = {'inline_keyboard': [[{'text': '⬅️ Назад', 'callback_data': 'client_menu'}]]}
-    send_message(chat_id, text, keyboard)
+    smart_send_message(chat_id, text, keyboard)
 
 def handle_client_subscription(chat_id: int) -> None:
     text = (
@@ -916,7 +977,7 @@ def handle_client_subscription(chat_id: int) -> None:
         "Для перехода на премиум-план свяжитесь с поддержкой."
     )
     keyboard = {'inline_keyboard': [[{'text': '⬅️ Назад', 'callback_data': 'client_menu'}]]}
-    send_message(chat_id, text, keyboard)
+    smart_send_message(chat_id, text, keyboard)
 
 def handle_courier_withdraw(chat_id: int, telegram_id: int, conn) -> None:
     cursor = conn.cursor()
@@ -940,7 +1001,7 @@ def handle_courier_withdraw(chat_id: int, telegram_id: int, conn) -> None:
             [{'text': '⬅️ Назад', 'callback_data': 'start'}]
         ]
     }
-    send_message(chat_id, text, keyboard)
+    smart_send_message(chat_id, text, keyboard)
 
 def handle_operator_stats(chat_id: int, conn) -> None:
     cursor = conn.cursor()
@@ -967,7 +1028,7 @@ def handle_operator_stats(chat_id: int, conn) -> None:
     )
     
     keyboard = {'inline_keyboard': [[{'text': '⬅️ Назад', 'callback_data': 'start'}]]}
-    send_message(chat_id, text, keyboard)
+    smart_send_message(chat_id, text, keyboard)
 
 def handle_operator_chats(chat_id: int, conn) -> None:
     cursor = conn.cursor()
@@ -1003,7 +1064,7 @@ def handle_operator_chats(chat_id: int, conn) -> None:
         keyboard_buttons.append([{'text': '⬅️ Назад', 'callback_data': 'start'}])
         keyboard = {'inline_keyboard': keyboard_buttons}
     
-    send_message(chat_id, text, keyboard)
+    smart_send_message(chat_id, text, keyboard)
 
 def handle_view_chat(chat_id: int, order_id: int, conn) -> None:
     cursor = conn.cursor()
@@ -1067,7 +1128,7 @@ def handle_view_chat(chat_id: int, order_id: int, conn) -> None:
         ]
     }
     
-    send_message(chat_id, text, keyboard)
+    smart_send_message(chat_id, text, keyboard)
 
 def handle_send_chat_message(chat_id: int, telegram_id: int, order_id: int, message_text: str, conn) -> None:
     cursor = conn.cursor()
@@ -1168,7 +1229,7 @@ def handle_open_chat(chat_id: int, telegram_id: int, order_id: int, user_type: s
         ]
     }
     
-    send_message(chat_id, text, keyboard)
+    smart_send_message(chat_id, text, keyboard)
 
 def handle_admin_courier_applications(chat_id: int, conn) -> None:
     cursor = conn.cursor()
@@ -1203,7 +1264,7 @@ def handle_admin_courier_applications(chat_id: int, conn) -> None:
         keyboard_buttons.append([{'text': '⬅️ Назад', 'callback_data': 'admin_couriers'}])
         keyboard = {'inline_keyboard': keyboard_buttons}
     
-    send_message(chat_id, text, keyboard)
+    smart_send_message(chat_id, text, keyboard)
 
 def handle_approve_courier(chat_id: int, admin_id: int, courier_id: int, conn) -> None:
     cursor = conn.cursor()
@@ -1277,14 +1338,17 @@ def handle_admin_all_orders(chat_id: int, conn) -> None:
         ]
     }
     
-    send_message(chat_id, text, keyboard)
+    smart_send_message(chat_id, text, keyboard)
 
 def handle_callback_query(callback_query: Dict, conn) -> None:
     chat_id = callback_query['message']['chat']['id']
+    message_id = callback_query['message']['message_id']
     telegram_id = callback_query['from']['id']
     username = callback_query['from'].get('username', '')
     first_name = callback_query['from'].get('first_name', '')
     data = callback_query['data']
+    
+    _context.message_id = message_id
     
     role = check_user_role(telegram_id, conn)
     
@@ -1395,8 +1459,11 @@ def handle_callback_query(callback_query: Dict, conn) -> None:
     elif data.startswith('courier_chat_'):
         order_id = int(data.split('_')[2])
         handle_open_chat(chat_id, telegram_id, order_id, 'courier', conn)
+    
+    _context.message_id = None
 
 def handle_message(message: Dict, conn) -> None:
+    _context.message_id = None
     chat_id = message['chat']['id']
     telegram_id = message['from']['id']
     username = message['from'].get('username', '')
@@ -1481,7 +1548,7 @@ def handle_message(message: Dict, conn) -> None:
                     [{'text': '⬅️ Назад', 'callback_data': 'client_menu'}]
                 ]
             }
-            send_message(chat_id, text, keyboard)
+            smart_send_message(chat_id, text, keyboard)
             return
         except ValueError:
             pass
