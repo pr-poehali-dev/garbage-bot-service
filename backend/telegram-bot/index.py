@@ -454,8 +454,17 @@ def handle_complete_order(chat_id: int, telegram_id: int, order_id: int, conn) -
         (telegram_id, price, price, datetime.now())
     )
     
+    cursor.execute("SELECT client_id FROM orders WHERE id = %s", (order_id,))
+    client = cursor.fetchone()
+    client_id = client[0] if client else None
+    
+    cursor.execute("DELETE FROM chat_sessions WHERE telegram_id IN (%s, %s)", (telegram_id, client_id))
+    
     conn.commit()
     cursor.close()
+    
+    if client_id:
+        send_message(client_id, f"✅ <b>Заказ #{order_id} завершен!</b>\n\nКурьер выполнил работу. Спасибо за использование нашего сервиса!")
     
     text = f"✅ Заказ #{order_id} завершён!\n\n💰 Заработано: {price} ₽"
     keyboard = {
@@ -1548,13 +1557,19 @@ def handle_message(message: Dict, conn) -> None:
         order_id = active_chat[0]
         
         cursor = conn.cursor()
-        cursor.execute("SELECT client_id, courier_id FROM orders WHERE id = %s", (order_id,))
+        cursor.execute("SELECT client_id, courier_id, status FROM orders WHERE id = %s", (order_id,))
         order_info = cursor.fetchone()
         cursor.close()
         
         if order_info:
-            client_id, courier_id = order_info
-            if telegram_id == client_id or telegram_id == courier_id:
+            client_id, courier_id, order_status = order_info
+            
+            if order_status == 'completed':
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM chat_sessions WHERE telegram_id = %s", (telegram_id,))
+                conn.commit()
+                cursor.close()
+            elif telegram_id == client_id or telegram_id == courier_id:
                 handle_send_chat_message(chat_id, telegram_id, order_id, text, conn)
                 return
     
