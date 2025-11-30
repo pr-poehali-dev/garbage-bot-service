@@ -1210,10 +1210,11 @@ def handle_send_chat_message(chat_id: int, telegram_id: int, order_id: int, mess
     recipient_id = courier_id if telegram_id == client_id else client_id
     
     if recipient_id:
-        role_text = "клиента" if telegram_id == courier_id else "курьера"
+        role_text = "курьера" if telegram_id == courier_id else "клиента"
+        recipient_type = "client" if recipient_id == client_id else "courier"
         keyboard = {
             'inline_keyboard': [
-                [{'text': '💬 Открыть чат', 'callback_data': f'{"client" if telegram_id == courier_id else "courier"}_chat_{order_id}'}]
+                [{'text': '💬 Открыть чат', 'callback_data': f'{recipient_type}_chat_{order_id}'}]
             ]
         }
         send_message(recipient_id, f"💬 <b>Новое сообщение от {role_text}</b>\n\n🆔 Заказ #{order_id}\n👤 {sender_name}:\n{message_text}", keyboard)
