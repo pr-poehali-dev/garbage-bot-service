@@ -1200,15 +1200,26 @@ def handle_send_chat_message(chat_id: int, telegram_id: int, order_id: int, mess
         (order_id, telegram_id, message_text)
     )
     conn.commit()
+    
+    cursor.execute("SELECT first_name FROM users WHERE telegram_id = %s", (telegram_id,))
+    sender = cursor.fetchone()
+    sender_name = sender[0] if sender else "Пользователь"
+    
     cursor.close()
     
     recipient_id = courier_id if telegram_id == client_id else client_id
     
     if recipient_id:
         role_text = "клиента" if telegram_id == courier_id else "курьера"
-        send_message(recipient_id, f"💬 Новое сообщение от {role_text} по заказу #{order_id}:\n\n{message_text}")
+        keyboard = {
+            'inline_keyboard': [
+                [{'text': '💬 Открыть чат', 'callback_data': f'{"client" if telegram_id == courier_id else "courier"}_chat_{order_id}'}]
+            ]
+        }
+        send_message(recipient_id, f"💬 <b>Новое сообщение от {role_text}</b>\n\n🆔 Заказ #{order_id}\n👤 {sender_name}:\n{message_text}", keyboard)
     
-    send_message(chat_id, f"✅ Сообщение отправлено по заказу #{order_id}")
+    user_type = 'client' if telegram_id == client_id else 'courier'
+    handle_open_chat(chat_id, telegram_id, order_id, user_type, conn)
 
 def handle_open_chat(chat_id: int, telegram_id: int, order_id: int, user_type: str, conn) -> None:
     cursor = conn.cursor()
@@ -1262,8 +1273,7 @@ def handle_open_chat(chat_id: int, telegram_id: int, order_id: int, user_type: s
             else:
                 text += f"<b>{sender_name}</b> ({time_str}):\n{message_text}\n\n"
     
-    text += "Отправьте сообщение в формате:\n<code>chat_{order_id} текст</code>\n\n"
-    text += f"<b>Пример:</b> <code>chat_{order_id} Еду через 10 минут</code>"
+    text += "💡 <b>Просто ответьте на это сообщение</b>, чтобы написать в чат"
     
     callback_key = 'client_active' if user_type == 'client' else 'courier_current'
     keyboard = {
@@ -1272,6 +1282,16 @@ def handle_open_chat(chat_id: int, telegram_id: int, order_id: int, user_type: s
             [{'text': '⬅️ Назад', 'callback_data': callback_key}]
         ]
     }
+    
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO chat_sessions (telegram_id, order_id, updated_at) "
+        "VALUES (%s, %s, %s) "
+        "ON CONFLICT (telegram_id) DO UPDATE SET order_id = %s, updated_at = %s",
+        (telegram_id, order_id, datetime.now(), order_id, datetime.now())
+    )
+    conn.commit()
+    cursor.close()
     
     smart_send_message(chat_id, text, keyboard)
 
@@ -1517,6 +1537,25 @@ def handle_message(message: Dict, conn) -> None:
     if text == '/start':
         handle_start(chat_id, telegram_id, username, first_name, conn)
         return
+    
+    cursor = conn.cursor()
+    cursor.execute("SELECT order_id FROM chat_sessions WHERE telegram_id = %s", (telegram_id,))
+    active_chat = cursor.fetchone()
+    cursor.close()
+    
+    if active_chat and text and not text.startswith('/') and not text.startswith('operator_') and not text.startswith('courier_') and not text.startswith('chat_'):
+        order_id = active_chat[0]
+        
+        cursor = conn.cursor()
+        cursor.execute("SELECT client_id, courier_id FROM orders WHERE id = %s", (order_id,))
+        order_info = cursor.fetchone()
+        cursor.close()
+        
+        if order_info:
+            client_id, courier_id = order_info
+            if telegram_id == client_id or telegram_id == courier_id:
+                handle_send_chat_message(chat_id, telegram_id, order_id, text, conn)
+                return
     
     role = check_user_role(telegram_id, conn)
     
