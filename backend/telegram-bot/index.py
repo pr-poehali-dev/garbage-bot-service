@@ -16,6 +16,8 @@ TELEGRAM_API = "https://api.telegram.org/bot{token}/{method}"
 
 _context = local()
 
+FIXED_COURIER_PAYMENT = 500
+
 ORDER_STATUSES = {
     'searching_courier': '🔍 В поиске курьера',
     'courier_on_way': '🚗 Курьер едет',
@@ -303,6 +305,12 @@ def handle_courier_available_orders(chat_id: int, telegram_id: int, conn) -> Non
 def handle_accept_order(chat_id: int, telegram_id: int, order_id: int, conn) -> None:
     cursor = conn.cursor()
     
+    role = check_user_role(telegram_id, conn)
+    if role != 'courier':
+        send_message(chat_id, "❌ Только курьеры могут принимать заказы")
+        cursor.close()
+        return
+    
     cursor.execute("SELECT status, address, description, price, client_id FROM orders WHERE id = %s", (order_id,))
     order = cursor.fetchone()
     
@@ -543,12 +551,11 @@ def handle_client_new_order(chat_id: int) -> None:
         "➕ <b>Создание нового заказа</b>\n\n"
         "Отправьте информацию о заказе в формате:\n\n"
         "<code>Адрес\n"
-        "Описание\n"
-        "Цена</code>\n\n"
+        "Описание</code>\n\n"
         "<b>Пример:</b>\n"
         "ул. Ленина, д. 45, кв. 12\n"
-        "Вывоз строительного мусора (3 мешка)\n"
-        "1500"
+        "Вывоз строительного мусора (3 мешка)\n\n"
+        f"💰 Стоимость услуги: <b>{FIXED_COURIER_PAYMENT} ₽</b>"
     )
     
     keyboard = {'inline_keyboard': [[{'text': '⬅️ Отмена', 'callback_data': 'client_menu'}]]}
@@ -604,6 +611,8 @@ def handle_client_active_orders(chat_id: int, telegram_id: int, conn) -> None:
 def handle_cancel_order(chat_id: int, telegram_id: int, order_id: int, conn) -> None:
     cursor = conn.cursor()
     
+    role = check_user_role(telegram_id, conn)
+    
     cursor.execute(
         "SELECT client_id, status, detailed_status FROM orders WHERE id = %s",
         (order_id,)
@@ -617,7 +626,7 @@ def handle_cancel_order(chat_id: int, telegram_id: int, order_id: int, conn) -> 
     
     client_id, status, detailed_status = order
     
-    if client_id != telegram_id:
+    if client_id != telegram_id and role not in ['admin', 'operator']:
         cursor.close()
         send_message(chat_id, "❌ Это не ваш заказ")
         return
@@ -1250,6 +1259,11 @@ def handle_view_chat(chat_id: int, order_id: int, conn) -> None:
 def handle_send_chat_message(chat_id: int, telegram_id: int, order_id: int, message_text: str, conn) -> None:
     cursor = conn.cursor()
     
+    if len(message_text) > 4000:
+        cursor.close()
+        send_message(chat_id, "❌ Сообщение слишком длинное (макс 4000 символов)")
+        return
+    
     cursor.execute(
         "SELECT client_id, courier_id FROM orders WHERE id = %s",
         (order_id,)
@@ -1671,6 +1685,8 @@ def handle_message(message: Dict, conn) -> None:
                 handle_add_operator(chat_id, telegram_id, operator_id, conn)
             except (ValueError, IndexError):
                 send_message(chat_id, "❌ Неверный формат. Используйте: operator_add ID")
+        else:
+            send_message(chat_id, "❌ Доступ запрещен")
         return
     
     if text.startswith('operator_remove '):
@@ -1680,6 +1696,8 @@ def handle_message(message: Dict, conn) -> None:
                 handle_remove_operator(chat_id, operator_id, conn)
             except (ValueError, IndexError):
                 send_message(chat_id, "❌ Неверный формат. Используйте: operator_remove ID")
+        else:
+            send_message(chat_id, "❌ Доступ запрещен")
         return
     
     if text.startswith('courier_remove '):
@@ -1689,6 +1707,8 @@ def handle_message(message: Dict, conn) -> None:
                 handle_remove_courier(chat_id, courier_id, conn)
             except (ValueError, IndexError):
                 send_message(chat_id, "❌ Неверный формат. Используйте: courier_remove ID")
+        else:
+            send_message(chat_id, "❌ Доступ запрещен")
         return
     
     if text.startswith('chat_'):
@@ -1707,39 +1727,39 @@ def handle_message(message: Dict, conn) -> None:
             return
     
     lines = text.strip().split('\n')
-    if len(lines) == 3:
+    if len(lines) == 2:
         address = lines[0].strip()
         description = lines[1].strip()
-        try:
-            price = int(lines[2].strip())
-            
-            cursor = conn.cursor()
-            cursor.execute(
-                "INSERT INTO orders (client_id, address, description, price, status, detailed_status) "
-                "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
-                (telegram_id, address, description, price, 'pending', 'searching_courier')
-            )
-            order_id = cursor.fetchone()[0]
-            conn.commit()
-            cursor.close()
-            
-            text = (
-                f"✅ Заказ #{order_id} создан!\n\n"
-                f"📍 {address}\n"
-                f"📝 {description}\n"
-                f"💰 {price} ₽\n\n"
-                "🔍 Статус: В поиске курьера"
-            )
-            keyboard = {
-                'inline_keyboard': [
-                    [{'text': '📦 Мои заказы', 'callback_data': 'client_active'}],
-                    [{'text': '⬅️ Назад', 'callback_data': 'client_menu'}]
-                ]
-            }
-            smart_send_message(chat_id, text, keyboard)
+        
+        if len(address) > 500 or len(description) > 1000:
+            send_message(chat_id, "❌ Адрес или описание слишком длинные")
             return
-        except ValueError:
-            pass
+        
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO orders (client_id, address, description, price, status, detailed_status) "
+            "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
+            (telegram_id, address, description, FIXED_COURIER_PAYMENT, 'pending', 'searching_courier')
+        )
+        order_id = cursor.fetchone()[0]
+        conn.commit()
+        cursor.close()
+        
+        text = (
+            f"✅ Заказ #{order_id} создан!\n\n"
+            f"📍 {address}\n"
+            f"📝 {description}\n"
+            f"💰 {FIXED_COURIER_PAYMENT} ₽\n\n"
+            "🔍 Статус: В поиске курьера"
+        )
+        keyboard = {
+            'inline_keyboard': [
+                [{'text': '📦 Мои заказы', 'callback_data': 'client_active'}],
+                [{'text': '⬅️ Назад', 'callback_data': 'client_menu'}]
+            ]
+        }
+        smart_send_message(chat_id, text, keyboard)
+        return
     
     send_message(chat_id, "Используйте /start для начала работы")
 
