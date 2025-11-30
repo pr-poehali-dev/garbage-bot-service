@@ -1138,8 +1138,8 @@ def handle_operator_stats(chat_id: int, conn) -> None:
 def handle_operator_chats(chat_id: int, conn) -> None:
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT DISTINCT o.id, o.address, u1.first_name as client_name, u2.first_name as courier_name, "
-        "(SELECT COUNT(*) FROM order_chat WHERE order_id = o.id) as message_count "
+        "SELECT o.id, o.address, u1.first_name as client_name, u2.first_name as courier_name, "
+        "(SELECT COUNT(*) FROM order_chat WHERE order_id = o.id) as message_count, o.created_at "
         "FROM orders o "
         "JOIN users u1 ON o.client_id = u1.telegram_id "
         "LEFT JOIN users u2 ON o.courier_id = u2.telegram_id "
