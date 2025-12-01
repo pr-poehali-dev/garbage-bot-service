@@ -1777,6 +1777,9 @@ def handle_message(message: Dict, conn) -> None:
         )
         order_id = cursor.fetchone()[0]
         conn.commit()
+        
+        cursor.execute("SELECT telegram_id FROM users WHERE role = %s", ('courier',))
+        couriers = cursor.fetchall()
         cursor.close()
         
         text = (
@@ -1793,6 +1796,24 @@ def handle_message(message: Dict, conn) -> None:
             ]
         }
         smart_send_message(chat_id, text, keyboard)
+        
+        notification_text = (
+            f"🆕 <b>Новый заказ #{order_id}</b>\n\n"
+            f"📍 {address}\n"
+            f"📝 {description}\n"
+            f"💰 {FIXED_COURIER_PAYMENT} ₽"
+        )
+        notification_keyboard = {
+            'inline_keyboard': [
+                [{'text': '✅ Принять заказ', 'callback_data': f'accept_order_{order_id}'}],
+                [{'text': '📦 Все заказы', 'callback_data': 'courier_available'}]
+            ]
+        }
+        
+        for courier in couriers:
+            courier_id = courier[0]
+            send_message(courier_id, notification_text, notification_keyboard)
+        
         return
     
     send_message(chat_id, "Используйте /start для начала работы")
