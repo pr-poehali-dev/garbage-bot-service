@@ -365,7 +365,12 @@ def handle_accept_order(chat_id: int, telegram_id: int, order_id: int, conn) -> 
     
     cursor.close()
     
-    send_message(client_id, f"🚗 <b>Курьер принял ваш заказ!</b>\n\n🆔 Заказ #{order_id}\n👔 Курьер {courier_name} уже едет к вам!")
+    keyboard = {
+        'inline_keyboard': [
+            [{'text': '💬 Написать курьеру', 'callback_data': f'client_chat_{order_id}'}]
+        ]
+    }
+    send_message(client_id, f"🚗 Курьер {courier_name} едет к вам", keyboard)
     
     text = f"✅ <b>Заказ #{order_id} принят!</b>\n\n"
     text += f"📍 Адрес: {address}\n"
@@ -449,7 +454,7 @@ def handle_start_work(chat_id: int, telegram_id: int, order_id: int, conn) -> No
     
     cursor.close()
     
-    send_message(client_id, f"🛠 <b>Курьер начал работу!</b>\n\n🆔 Заказ #{order_id}\n👔 {courier_name} начал выполнение вашего заказа")
+    send_message(client_id, f"🛠 {courier_name} начал работу")
     
     text = f"🛠 <b>Работа над заказом #{order_id} начата!</b>\n\n"
     text += f"📍 Адрес: {address}\n"
@@ -504,7 +509,12 @@ def handle_complete_order(chat_id: int, telegram_id: int, order_id: int, conn) -
     cursor.close()
     
     if client_id:
-        send_message(client_id, f"✅ <b>Заказ #{order_id} завершен!</b>\n\nКурьер выполнил работу. Спасибо за использование нашего сервиса!")
+        keyboard = {
+            'inline_keyboard': [
+                [{'text': '⭐ Оценить курьера', 'callback_data': f'rate_order_{order_id}'}]
+            ]
+        }
+        send_message(client_id, f"✅ Заказ завершен", keyboard)
     
     text = f"✅ Заказ #{order_id} завершён!\n\n💰 Заработано: {price} ₽"
     keyboard = {
@@ -1307,7 +1317,7 @@ def handle_view_chat(chat_id: int, order_id: int, conn) -> None:
             
             text += f"{icon} <b>{sender_name}</b> ({time_str}):\n{message_text}\n\n"
     
-    text += "\n\n💡 <b>Просто ответьте на это сообщение</b>, чтобы написать в чат как оператор"
+    text += "\n━━━━━━━━━━━━━━━━━━\n\n💬 Отправьте сообщение чтобы ответить"
     
     keyboard = {
         'inline_keyboard': [
@@ -1374,35 +1384,30 @@ def handle_send_chat_message(chat_id: int, telegram_id: int, order_id: int, mess
         if client_id:
             keyboard = {
                 'inline_keyboard': [
-                    [{'text': '💬 Открыть чат', 'callback_data': f'client_chat_{order_id}'}]
+                    [{'text': '💬 Ответить', 'callback_data': f'client_chat_{order_id}'}]
                 ]
             }
-            send_message(client_id, f"⚙️ <b>Сообщение от оператора</b>\n\n🆔 Заказ #{order_id}\n👤 {sender_name}:\n{message_text}", keyboard)
+            send_message(client_id, f"⚙️ <b>Оператор</b>: {message_text}", keyboard)
         
         if courier_id:
             keyboard = {
                 'inline_keyboard': [
-                    [{'text': '💬 Открыть чат', 'callback_data': f'courier_chat_{order_id}'}]
+                    [{'text': '💬 Ответить', 'callback_data': f'courier_chat_{order_id}'}]
                 ]
             }
-            send_message(courier_id, f"⚙️ <b>Сообщение от оператора</b>\n\n🆔 Заказ #{order_id}\n👤 {sender_name}:\n{message_text}", keyboard)
-        
-        handle_view_chat(chat_id, order_id, conn)
+            send_message(courier_id, f"⚙️ <b>Оператор</b>: {message_text}", keyboard)
     else:
         recipient_id = courier_id if telegram_id == client_id else client_id
         
         if recipient_id:
-            role_text = "курьера" if telegram_id == courier_id else "клиента"
+            role_text = "Курьер" if telegram_id == courier_id else "Клиент"
             recipient_type = "client" if recipient_id == client_id else "courier"
             keyboard = {
                 'inline_keyboard': [
-                    [{'text': '💬 Открыть чат', 'callback_data': f'{recipient_type}_chat_{order_id}'}]
+                    [{'text': '💬 Ответить', 'callback_data': f'{recipient_type}_chat_{order_id}'}]
                 ]
             }
-            send_message(recipient_id, f"💬 <b>Новое сообщение от {role_text}</b>\n\n🆔 Заказ #{order_id}\n👤 {sender_name}:\n{message_text}", keyboard)
-        
-        user_type = 'client' if telegram_id == client_id else 'courier'
-        handle_open_chat(chat_id, telegram_id, order_id, user_type, conn)
+            send_message(recipient_id, f"<b>{role_text}</b>: {message_text}", keyboard)
 
 def handle_open_chat(chat_id: int, telegram_id: int, order_id: int, user_type: str, conn) -> None:
     cursor = conn.cursor()
@@ -1456,7 +1461,7 @@ def handle_open_chat(chat_id: int, telegram_id: int, order_id: int, user_type: s
             else:
                 text += f"<b>{sender_name}</b> ({time_str}):\n{message_text}\n\n"
     
-    text += "💡 <b>Просто ответьте на это сообщение</b>, чтобы написать в чат"
+    text += "━━━━━━━━━━━━━━━━━━\n\n💬 Отправьте сообщение для ответа"
     
     callback_key = 'client_active' if user_type == 'client' else 'courier_current'
     keyboard = {
@@ -1873,37 +1878,23 @@ def handle_message(message: Dict, conn) -> None:
         couriers = cursor.fetchall()
         cursor.close()
         
-        text = (
-            f"✅ Заказ #{order_id} создан!\n\n"
-            f"📍 {address}\n"
-            f"📝 {description}\n"
-            f"💰 {FIXED_COURIER_PAYMENT} ₽\n\n"
-            "🔍 Статус: В поиске курьера"
-        )
         keyboard = {
             'inline_keyboard': [
                 [{'text': '📦 Мои заказы', 'callback_data': 'client_active'}],
-                [{'text': '⬅️ Назад', 'callback_data': 'client_menu'}]
+                [{'text': '⬅️ В меню', 'callback_data': 'start'}]
             ]
         }
-        smart_send_message(chat_id, text, keyboard)
+        smart_send_message(chat_id, f"✅ Заказ #{order_id} создан\n🔍 Ищем курьера...", keyboard)
         
-        notification_text = (
-            f"🆕 <b>Новый заказ #{order_id}</b>\n\n"
-            f"📍 {address}\n"
-            f"📝 {description}\n"
-            f"💰 {FIXED_COURIER_PAYMENT} ₽"
-        )
         notification_keyboard = {
             'inline_keyboard': [
-                [{'text': '✅ Принять заказ', 'callback_data': f'accept_order_{order_id}'}],
-                [{'text': '📦 Все заказы', 'callback_data': 'courier_available'}]
+                [{'text': '✅ Принять', 'callback_data': f'accept_order_{order_id}'}]
             ]
         }
         
         for courier in couriers:
             courier_id = courier[0]
-            send_message(courier_id, notification_text, notification_keyboard)
+            send_message(courier_id, f"🆕 #{order_id}: {address}\n💰 {FIXED_COURIER_PAYMENT} ₽", notification_keyboard)
         
         return
     
