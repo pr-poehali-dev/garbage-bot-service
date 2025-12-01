@@ -187,6 +187,31 @@ def get_client_menu_keyboard() -> Dict:
         ]
     }
 
+def archive_old_chats(conn) -> None:
+    cursor = conn.cursor()
+    
+    cursor.execute(
+        "INSERT INTO order_chat_archive (order_id, sender_id, message, created_at) "
+        "SELECT oc.order_id, oc.sender_id, oc.message, oc.created_at "
+        "FROM order_chat oc "
+        "JOIN orders o ON oc.order_id = o.id "
+        "WHERE o.status IN ('completed', 'cancelled') "
+        "AND o.updated_at < NOW() - INTERVAL '7 days' "
+        "AND oc.is_archived = FALSE"
+    )
+    
+    cursor.execute(
+        "UPDATE order_chat SET is_archived = TRUE "
+        "WHERE order_id IN ("
+        "    SELECT o.id FROM orders o "
+        "    WHERE o.status IN ('completed', 'cancelled') "
+        "    AND o.updated_at < NOW() - INTERVAL '7 days'"
+        ")"
+    )
+    
+    conn.commit()
+    cursor.close()
+
 def get_or_create_user(telegram_id: int, username: str, first_name: str, conn) -> Dict:
     cursor = conn.cursor()
     
@@ -223,6 +248,11 @@ def get_or_create_user(telegram_id: int, username: str, first_name: str, conn) -
 def handle_start(chat_id: int, telegram_id: int, username: str, first_name: str, conn) -> None:
     get_or_create_user(telegram_id, username, first_name, conn)
     role = check_user_role(telegram_id, conn)
+    
+    try:
+        archive_old_chats(conn)
+    except Exception:
+        pass
     
     if role == 'admin':
         welcome_text = "👑 <b>Админ-панель</b>\n\nДобро пожаловать в панель администратора."
@@ -1150,7 +1180,7 @@ def handle_operator_chats(chat_id: int, conn) -> None:
     cursor = conn.cursor()
     cursor.execute(
         "SELECT o.id, o.address, u1.first_name as client_name, u2.first_name as courier_name, "
-        "(SELECT COUNT(*) FROM order_chat WHERE order_id = o.id) as message_count, o.created_at, o.detailed_status "
+        "(SELECT COUNT(*) FROM order_chat WHERE order_id = o.id AND is_archived = FALSE) as message_count, o.created_at, o.detailed_status "
         "FROM orders o "
         "JOIN users u1 ON o.client_id = u1.telegram_id "
         "LEFT JOIN users u2 ON o.courier_id = u2.telegram_id "
@@ -1162,7 +1192,10 @@ def handle_operator_chats(chat_id: int, conn) -> None:
     
     if not orders:
         text = "💬 <b>Чаты заказов</b>\n\nНет активных заказов"
-        keyboard = {'inline_keyboard': [[{'text': '⬅️ Назад', 'callback_data': 'start'}]]}
+        keyboard = {'inline_keyboard': [
+            [{'text': '🔍 Найти чат по номеру', 'callback_data': 'search_chat'}],
+            [{'text': '⬅️ Назад', 'callback_data': 'start'}]
+        ]}
     else:
         text = "💬 <b>Чаты заказов</b>\n\nВыберите заказ для просмотра чата:\n\n"
         keyboard_buttons = []
@@ -1177,10 +1210,16 @@ def handle_operator_chats(chat_id: int, conn) -> None:
             
             keyboard_buttons.append([{'text': f'💬 Чат #{order_id} - {client_name}', 'callback_data': f'view_chat_{order_id}'}])
         
+        keyboard_buttons.append([{'text': '🔍 Найти чат по номеру', 'callback_data': 'search_chat'}])
         keyboard_buttons.append([{'text': '⬅️ Назад', 'callback_data': 'start'}])
         keyboard = {'inline_keyboard': keyboard_buttons}
     
     smart_send_message(chat_id, text, keyboard)
+
+def handle_search_chat_prompt(chat_id: int) -> None:
+    text = "🔍 <b>Поиск чата</b>\n\nОтправьте номер заказа для просмотра чата.\n\nНапример: <code>chat_123</code>"
+    keyboard = {'inline_keyboard': [[{'text': '❌ Отмена', 'callback_data': 'operator_chats'}]]}
+    send_message(chat_id, text, keyboard)
 
 def handle_view_chat(chat_id: int, order_id: int, conn) -> None:
     cursor = conn.cursor()
@@ -1207,11 +1246,21 @@ def handle_view_chat(chat_id: int, order_id: int, conn) -> None:
         "SELECT oc.message, oc.created_at, u.first_name, oc.sender_id "
         "FROM order_chat oc "
         "JOIN users u ON oc.sender_id = u.telegram_id "
-        "WHERE oc.order_id = %s "
+        "WHERE oc.order_id = %s AND oc.is_archived = FALSE "
         "ORDER BY oc.created_at ASC LIMIT 50",
         (order_id,)
     )
     messages = cursor.fetchall()
+    
+    cursor.execute(
+        "SELECT oca.message, oca.created_at, u.first_name, oca.sender_id "
+        "FROM order_chat_archive oca "
+        "JOIN users u ON oca.sender_id = u.telegram_id "
+        "WHERE oca.order_id = %s "
+        "ORDER BY oca.created_at ASC",
+        (order_id,)
+    )
+    archived_messages = cursor.fetchall()
     cursor.close()
     
     text = f"💬 <b>Чат заказа #{order_id}</b>\n\n"
@@ -1221,9 +1270,30 @@ def handle_view_chat(chat_id: int, order_id: int, conn) -> None:
         text += f" (ID: {courier_id})"
     text += "\n\n━━━━━━━━━━━━━━━━━━\n\n"
     
+    if archived_messages:
+        text += "📁 <b>Архивные сообщения:</b>\n\n"
+        for msg in archived_messages:
+            message_text, created_at, sender_name, sender_id = msg
+            date_str = created_at.strftime("%d.%m %H:%M")
+            
+            if sender_id == client_id:
+                icon = "👤"
+            elif sender_id == courier_id:
+                icon = "👔"
+            else:
+                icon = "⚙️"
+            
+            text += f"{icon} <b>{sender_name}</b> ({date_str}):\n{message_text}\n\n"
+        
+        text += "━━━━━━━━━━━━━━━━━━\n\n"
+    
     if not messages:
-        text += "Сообщений пока нет"
+        if not archived_messages:
+            text += "Сообщений пока нет"
+        else:
+            text += "Новых сообщений нет"
     else:
+        text += "💬 <b>Текущие сообщения:</b>\n\n"
         for msg in messages:
             message_text, created_at, sender_name, sender_id = msg
             time_str = created_at.strftime("%H:%M")
@@ -1623,6 +1693,9 @@ def handle_callback_query(callback_query: Dict, conn) -> None:
     elif data == 'operator_chats':
         if role in ['operator', 'admin']:
             handle_operator_chats(chat_id, conn)
+    elif data == 'search_chat':
+        if role in ['operator', 'admin']:
+            handle_search_chat_prompt(chat_id)
     elif data.startswith('view_chat_'):
         if role in ['operator', 'admin']:
             order_id = int(data.split('_')[2])
@@ -1746,19 +1819,37 @@ def handle_message(message: Dict, conn) -> None:
         return
     
     if text.startswith('chat_'):
-        try:
-            parts = text.split(' ', 1)
-            if len(parts) < 2:
-                send_message(chat_id, "❌ Неверный формат. Отправьте сообщение после номера заказа")
+        if role in ['operator', 'admin']:
+            try:
+                order_id = int(text.replace('chat_', ''))
+                
+                cursor = conn.cursor()
+                cursor.execute("SELECT id FROM orders WHERE id = %s", (order_id,))
+                order_exists = cursor.fetchone()
+                cursor.close()
+                
+                if order_exists:
+                    handle_view_chat(chat_id, order_id, conn)
+                else:
+                    send_message(chat_id, "❌ Заказ с таким номером не найден")
                 return
-            
-            order_id = int(parts[0].replace('chat_', ''))
-            message_text = parts[1]
-            handle_send_chat_message(chat_id, telegram_id, order_id, message_text, conn)
-            return
-        except (ValueError, IndexError):
-            send_message(chat_id, "❌ Неверный формат чата. Используйте: chat_ID текст")
-            return
+            except ValueError:
+                send_message(chat_id, "❌ Неверный формат. Используйте: chat_123")
+                return
+        else:
+            try:
+                parts = text.split(' ', 1)
+                if len(parts) < 2:
+                    send_message(chat_id, "❌ Неверный формат. Отправьте сообщение после номера заказа")
+                    return
+                
+                order_id = int(parts[0].replace('chat_', ''))
+                message_text = parts[1]
+                handle_send_chat_message(chat_id, telegram_id, order_id, message_text, conn)
+                return
+            except (ValueError, IndexError):
+                send_message(chat_id, "❌ Неверный формат чата. Используйте: chat_ID текст")
+                return
     
     lines = text.strip().split('\n')
     if len(lines) == 2:
