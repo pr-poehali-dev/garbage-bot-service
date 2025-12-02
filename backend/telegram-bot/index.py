@@ -1316,18 +1316,6 @@ def handle_buy_subscription(chat_id: int, telegram_id: int, sub_type: str, conn)
     price = 2499 if sub_type == 'daily' else 1399
     sub_name = "Каждый день" if sub_type == 'daily' else "Через день"
     
-    cursor = conn.cursor()
-    cursor.execute(
-        f"DELETE FROM {SCHEMA}.chat_sessions WHERE telegram_id = %s",
-        (telegram_id,)
-    )
-    cursor.execute(
-        f"INSERT INTO {SCHEMA}.chat_sessions (telegram_id, state, order_data) VALUES (%s, %s, %s)",
-        (telegram_id, 'waiting_subscription_payment', json.dumps({'sub_type': sub_type, 'price': price}))
-    )
-    conn.commit()
-    cursor.close()
-    
     text = (
         f"⭐ <b>Заявка на подписку '{sub_name}'</b>\n\n"
         f"💰 Стоимость: {price}₽ в месяц\n\n"
