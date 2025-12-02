@@ -1326,7 +1326,7 @@ def handle_buy_subscription(chat_id: int, telegram_id: int, sub_type: str, conn)
     )
     
     cursor = conn.cursor()
-    cursor.execute(f"SELECT telegram_id, first_name FROM {SCHEMA}.admin_users au JOIN {SCHEMA}.users u ON au.telegram_id = u.telegram_id LIMIT 1")
+    cursor.execute(f"SELECT u.telegram_id, u.first_name FROM {SCHEMA}.admin_users au JOIN {SCHEMA}.users u ON au.telegram_id = u.telegram_id LIMIT 1")
     admin = cursor.fetchone()
     cursor.close()
     
