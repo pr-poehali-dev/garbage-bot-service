@@ -20,6 +20,7 @@ BAG_PRICE = 50
 MAX_BAGS_QUICK_SELECT = 10
 
 ORDER_STATUSES = {
+    'waiting_payment': '💳 Ожидает оплаты',
     'searching_courier': '🔍 В поиске курьера',
     'courier_on_way': '🚗 Курьер едет',
     'courier_working': '🛠 Курьер выполняет заказ',
@@ -2191,37 +2192,73 @@ def handle_message(message: Dict, conn) -> None:
             total_price = order_data.get('price', BAG_PRICE * bag_count)
             
             cursor.execute(
-                f"INSERT INTO {SCHEMA}.orders (client_id, address, description, price, status, detailed_status, bag_count, is_subscription_order) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
-                (telegram_id, address, f"Вывоз мусора ({bag_count} пакетов)", total_price, 'pending', 'searching_courier', bag_count, is_subscription)
+                f"INSERT INTO {SCHEMA}.orders (client_id, address, description, price, status, detailed_status, bag_count, is_subscription_order, payment_status) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
+                (telegram_id, address, f"Вывоз мусора ({bag_count} пакетов)", total_price, 'pending', 'waiting_payment', bag_count, is_subscription, 'pending')
             )
             order_id = cursor.fetchone()[0]
             conn.commit()
             
             cursor.execute(f"DELETE FROM {SCHEMA}.order_draft WHERE telegram_id = %s", (telegram_id,))
             conn.commit()
-            
-            cursor.execute(f"SELECT telegram_id FROM {SCHEMA}.users WHERE role = %s", ('courier',))
-            couriers = cursor.fetchall()
             cursor.close()
             
-            keyboard = {
-                'inline_keyboard': [
-                    [{'text': '📦 Мои заказы', 'callback_data': 'client_active'}],
-                    [{'text': '⬅️ В меню', 'callback_data': 'start'}]
-                ]
-            }
-            smart_send_message(chat_id, f"✅ Заказ #{order_id} создан\n🔍 Ищем курьера...", keyboard)
-            
-            notification_keyboard = {
-                'inline_keyboard': [
-                    [{'text': '✅ Принять', 'callback_data': f'accept_order_{order_id}'}]
-                ]
-            }
-            
-            for courier in couriers:
-                courier_id = courier[0]
-                send_message(courier_id, f"🆕 #{order_id}: {address}\n📦 {bag_count} пакетов\n💰 {total_price} ₽", notification_keyboard)
+            try:
+                import requests
+                payment_response = requests.post(
+                    'https://functions.poehali.dev/32a57b72-d077-4b28-957b-013b624def6c/yoomoney-create-payment',
+                    json={
+                        'amount': total_price,
+                        'description': f"Заказ #{order_id}: Вывоз мусора ({bag_count} мешков)",
+                        'order_id': order_id
+                    },
+                    timeout=10
+                )
+                
+                if payment_response.status_code == 200:
+                    payment_data = payment_response.json()
+                    payment_url = payment_data.get('payment_url')
+                    payment_id = payment_data.get('payment_id')
+                    
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        f"UPDATE {SCHEMA}.orders SET payment_id = %s, payment_url = %s WHERE id = %s",
+                        (payment_id, payment_url, order_id)
+                    )
+                    conn.commit()
+                    cursor.close()
+                    
+                    keyboard = {
+                        'inline_keyboard': [
+                            [{'text': '💳 Оплатить', 'url': payment_url}],
+                            [{'text': '📦 Мои заказы', 'callback_data': 'client_active'}],
+                            [{'text': '⬅️ В меню', 'callback_data': 'start'}]
+                        ]
+                    }
+                    smart_send_message(chat_id, 
+                        f"✅ Заказ #{order_id} создан!\n\n"
+                        f"💰 Сумма: {total_price} ₽\n"
+                        f"📦 Мешков: {bag_count}\n"
+                        f"📍 Адрес: {address}\n\n"
+                        f"Для подтверждения заказа нажмите кнопку «Оплатить»", 
+                        keyboard
+                    )
+                else:
+                    keyboard = {
+                        'inline_keyboard': [
+                            [{'text': '📦 Мои заказы', 'callback_data': 'client_active'}],
+                            [{'text': '⬅️ В меню', 'callback_data': 'start'}]
+                        ]
+                    }
+                    smart_send_message(chat_id, "❌ Ошибка создания платежа. Попробуйте позже.", keyboard)
+            except Exception as e:
+                keyboard = {
+                    'inline_keyboard': [
+                        [{'text': '📦 Мои заказы', 'callback_data': 'client_active'}],
+                        [{'text': '⬅️ В меню', 'callback_data': 'start'}]
+                    ]
+                }
+                smart_send_message(chat_id, f"❌ Ошибка: {str(e)}", keyboard)
             
             return
     

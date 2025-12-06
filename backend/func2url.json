@@ -1,3 +1,5 @@
 {
+  "yoomoney-webhook": "https://functions.poehali.dev/cc2d0d2c-5f75-4329-b8f9-c25ef4fae5b5",
+  "yoomoney-create-payment": "https://functions.poehali.dev/b4b440af-a2f4-4b49-86be-5c7dafb0762d",
   "telegram-bot": "https://functions.poehali.dev/32a57b72-d077-4b28-957b-013b624def6c"
 }
