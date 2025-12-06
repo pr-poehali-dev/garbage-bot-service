@@ -16,8 +16,23 @@ TELEGRAM_API = "https://api.telegram.org/bot{token}/{method}"
 
 _context = local()
 
-BAG_PRICE = 50
 MAX_BAGS_QUICK_SELECT = 10
+
+def get_setting(conn, key: str, default: str = '0') -> str:
+    '''Получение значения настройки из базы данных'''
+    cursor = conn.cursor()
+    cursor.execute(f"SELECT value FROM {SCHEMA}.settings WHERE key = %s", (key,))
+    result = cursor.fetchone()
+    cursor.close()
+    return result[0] if result else default
+
+def get_bag_price(conn) -> int:
+    return int(get_setting(conn, 'bag_price', '50'))
+
+def get_subscription_prices(conn) -> tuple:
+    daily = int(get_setting(conn, 'subscription_daily_price', '2499'))
+    alternate = int(get_setting(conn, 'subscription_alternate_price', '1399'))
+    return daily, alternate
 
 ORDER_STATUSES = {
     'waiting_payment': '💳 Ожидает оплаты',
@@ -570,16 +585,17 @@ def handle_courier_stats(chat_id: int, telegram_id: int, conn) -> None:
 
 
 
-def handle_client_new_order(chat_id: int) -> None:
+def handle_client_new_order(chat_id: int, conn) -> None:
+    bag_price = get_bag_price(conn)
     text = (
         "🗑 <b>Выберите количество пакетов</b>\n\n"
-        f"💰 Цена: {BAG_PRICE} ₽ за пакет (35л)\n\n"
+        f"💰 Цена: {bag_price} ₽ за пакет (35л)\n\n"
         "Выберите количество или введите своё:"
     )
     
     keyboard_buttons = []
     for i in range(1, MAX_BAGS_QUICK_SELECT + 1):
-        total = BAG_PRICE * i
+        total = bag_price * i
         keyboard_buttons.append([{'text': f'{i} пакет - {total} ₽', 'callback_data': f'select_bags_{i}'}])
     
     keyboard_buttons.append([{'text': '✏️ Ввести своё количество', 'callback_data': 'custom_bags'}])
@@ -592,6 +608,7 @@ def handle_select_bags(chat_id: int, telegram_id: int, bag_count: int, conn) -> 
     from datetime import timedelta
     
     cursor = conn.cursor()
+    bag_price = get_bag_price(conn)
     
     cursor.execute(
         f"SELECT id, type, bags_used_today, last_order_date FROM {SCHEMA}.subscriptions "
@@ -602,7 +619,7 @@ def handle_select_bags(chat_id: int, telegram_id: int, bag_count: int, conn) -> 
     subscription = cursor.fetchone()
     
     is_subscription_order = False
-    total_price = BAG_PRICE * bag_count
+    total_price = bag_price * bag_count
     
     if subscription and bag_count <= 2:
         sub_id, sub_type, bags_used, last_date = subscription
@@ -648,10 +665,11 @@ def handle_select_bags(chat_id: int, telegram_id: int, bag_count: int, conn) -> 
             "ул. Ленина, д. 45, кв. 12"
         )
     else:
+        bag_price = get_bag_price(conn)
         text = (
             f"📦 <b>Выбрано пакетов: {bag_count}</b>\n\n"
             f"💰 Стоимость: {total_price} ₽\n"
-            f"({bag_count} × {BAG_PRICE}₽)\n\n"
+            f"({bag_count} × {bag_price}₽)\n\n"
             "📍 <b>Отправьте адрес доставки:</b>\n\n"
             "<b>Пример:</b>\n"
             "ул. Ленина, д. 45, кв. 12"
@@ -951,7 +969,8 @@ def handle_admin_grant_subscription(chat_id: int, client_id: int, sub_type: str,
         send_message(chat_id, "❌ Пользователь не найден")
         return
     
-    price = 2499 if sub_type == 'daily' else 1399
+    daily_price, alternate_price = get_subscription_prices(conn)
+    price = daily_price if sub_type == 'daily' else alternate_price
     sub_name = "Ежедневно" if sub_type == 'daily' else "Через день"
     start_date = datetime.now().date()
     end_date = start_date + timedelta(days=30)
@@ -986,12 +1005,90 @@ def handle_admin_panel(chat_id: int, conn) -> None:
             [{'text': '👔 Управление курьерами', 'callback_data': 'admin_couriers'}],
             [{'text': '👥 Управление операторами', 'callback_data': 'admin_operators'}],
             [{'text': '⭐ Управление подписками', 'callback_data': 'admin_subscriptions'}],
+            [{'text': '💰 Настройка цен', 'callback_data': 'admin_prices'}],
             [{'text': '📊 Статистика сервиса', 'callback_data': 'admin_stats'}],
             [{'text': '📦 Все заказы', 'callback_data': 'admin_all_orders'}],
             [{'text': '⬅️ Назад', 'callback_data': 'start'}]
         ]
     }
     
+    smart_send_message(chat_id, text, keyboard)
+
+def handle_admin_prices(chat_id: int, conn) -> None:
+    bag_price = get_bag_price(conn)
+    daily_price, alternate_price = get_subscription_prices(conn)
+    
+    text = (
+        "💰 <b>Настройка цен</b>\n\n"
+        f"🗑 Цена за пакет: {bag_price}₽\n"
+        f"📅 Подписка (каждый день): {daily_price}₽\n"
+        f"🔄 Подписка (через день): {alternate_price}₽\n\n"
+        "Выберите, что изменить:"
+    )
+    
+    keyboard = {
+        'inline_keyboard': [
+            [{'text': '🗑 Изменить цену пакета', 'callback_data': 'change_bag_price'}],
+            [{'text': '📅 Изменить цену подписки (ежедневно)', 'callback_data': 'change_daily_price'}],
+            [{'text': '🔄 Изменить цену подписки (через день)', 'callback_data': 'change_alternate_price'}],
+            [{'text': '⬅️ Назад', 'callback_data': 'admin_panel'}]
+        ]
+    }
+    
+    smart_send_message(chat_id, text, keyboard)
+
+def handle_change_price_prompt(chat_id: int, price_type: str, conn) -> None:
+    price_names = {
+        'bag': ('🗑 Цена за пакет', get_bag_price(conn)),
+        'daily': ('📅 Подписка (каждый день)', get_subscription_prices(conn)[0]),
+        'alternate': ('🔄 Подписка (через день)', get_subscription_prices(conn)[1])
+    }
+    
+    name, current_price = price_names.get(price_type, ('Цена', 0))
+    
+    text = (
+        f"💰 <b>Изменить {name}</b>\n\n"
+        f"Текущая цена: {current_price}₽\n\n"
+        "Отправьте новую цену в формате:\n"
+        f"<code>price_{price_type}_ЧИСЛО</code>\n\n"
+        "<b>Пример:</b>\n"
+        f"<code>price_{price_type}_60</code>"
+    )
+    
+    keyboard = {'inline_keyboard': [[{'text': '⬅️ Назад', 'callback_data': 'admin_prices'}]]}
+    smart_send_message(chat_id, text, keyboard)
+
+def handle_update_price(chat_id: int, price_type: str, new_price: int, conn) -> None:
+    cursor = conn.cursor()
+    
+    price_keys = {
+        'bag': 'bag_price',
+        'daily': 'subscription_daily_price',
+        'alternate': 'subscription_alternate_price'
+    }
+    
+    price_names = {
+        'bag': '🗑 Цена за пакет',
+        'daily': '📅 Подписка (каждый день)',
+        'alternate': '🔄 Подписка (через день)'
+    }
+    
+    key = price_keys.get(price_type)
+    name = price_names.get(price_type)
+    
+    if not key:
+        send_message(chat_id, "❌ Неверный тип цены")
+        return
+    
+    cursor.execute(
+        f"UPDATE {SCHEMA}.settings SET value = %s, updated_at = CURRENT_TIMESTAMP WHERE key = %s",
+        (str(new_price), key)
+    )
+    conn.commit()
+    cursor.close()
+    
+    text = f"✅ {name} изменена на {new_price}₽"
+    keyboard = {'inline_keyboard': [[{'text': '⬅️ К настройкам цен', 'callback_data': 'admin_prices'}]]}
     smart_send_message(chat_id, text, keyboard)
 
 def handle_admin_couriers_menu(chat_id: int, conn) -> None:
@@ -1319,7 +1416,8 @@ def handle_buy_subscription(chat_id: int, telegram_id: int, sub_type: str, conn)
     from datetime import timedelta
     import requests
     
-    price = 2499 if sub_type == 'daily' else 1399
+    daily_price, alternate_price = get_subscription_prices(conn)
+    price = daily_price if sub_type == 'daily' else alternate_price
     sub_name = "Каждый день" if sub_type == 'daily' else "Через день"
     
     cursor = conn.cursor()
@@ -1421,13 +1519,14 @@ def handle_client_subscription(chat_id: int, telegram_id: int, conn) -> None:
         )
         keyboard = {'inline_keyboard': [[{'text': '⬅️ Назад', 'callback_data': 'client_menu'}]]}
     else:
+        daily_price, alternate_price = get_subscription_prices(conn)
         text = (
             "⭐ <b>Подписки на вывоз мусора</b>\n\n"
-            "🔄 <b>Через день (1399₽/мес)</b>\n"
+            f"🔄 <b>Через день ({alternate_price}₽/мес)</b>\n"
             "• До 2 пакетов через день\n"
             "• Без доплат\n"
             "• Экономия ~40%\n\n"
-            "📅 <b>Каждый день (2499₽/мес)</b>\n"
+            f"📅 <b>Каждый день ({daily_price}₽/мес)</b>\n"
             "• До 2 пакетов каждый день\n"
             "• Без доплат\n"
             "• Максимум удобства\n\n"
@@ -1435,8 +1534,8 @@ def handle_client_subscription(chat_id: int, telegram_id: int, conn) -> None:
         )
         keyboard = {
             'inline_keyboard': [
-                [{'text': '🔄 Через день - 1399₽', 'callback_data': 'buy_sub_alternate'}],
-                [{'text': '📅 Каждый день - 2499₽', 'callback_data': 'buy_sub_daily'}],
+                [{'text': f'🔄 Через день - {alternate_price}₽', 'callback_data': 'buy_sub_alternate'}],
+                [{'text': f'📅 Каждый день - {daily_price}₽', 'callback_data': 'buy_sub_daily'}],
                 [{'text': '⬅️ Назад', 'callback_data': 'client_menu'}]
             ]
         }
@@ -1927,7 +2026,7 @@ def handle_callback_query(callback_query: Dict, conn) -> None:
         handle_courier_stats(chat_id, telegram_id, conn)
 
     elif data == 'client_new_order':
-        handle_client_new_order(chat_id)
+        handle_client_new_order(chat_id, conn)
     elif data == 'client_active':
         handle_client_active_orders(chat_id, telegram_id, conn)
     elif data == 'operator_active_orders':
@@ -2074,6 +2173,18 @@ def handle_callback_query(callback_query: Dict, conn) -> None:
         handle_buy_subscription(chat_id, telegram_id, 'alternate_day', conn)
     elif data == 'buy_sub_daily':
         handle_buy_subscription(chat_id, telegram_id, 'daily', conn)
+    elif data == 'admin_prices':
+        if role == 'admin':
+            handle_admin_prices(chat_id, conn)
+    elif data == 'change_bag_price':
+        if role == 'admin':
+            handle_change_price_prompt(chat_id, 'bag', conn)
+    elif data == 'change_daily_price':
+        if role == 'admin':
+            handle_change_price_prompt(chat_id, 'daily', conn)
+    elif data == 'change_alternate_price':
+        if role == 'admin':
+            handle_change_price_prompt(chat_id, 'alternate', conn)
     
     _context.message_id = None
 
@@ -2171,6 +2282,32 @@ def handle_message(message: Dict, conn) -> None:
                 handle_admin_grant_subscription(chat_id, client_id, sub_type, conn)
             except (ValueError, IndexError):
                 send_message(chat_id, "❌ Неверный формат. Используйте: sub_add USER_ID TYPE")
+        else:
+            send_message(chat_id, "❌ Доступ запрещен")
+        return
+    
+    if text.startswith('price_'):
+        if role == 'admin':
+            try:
+                parts = text.split('_')
+                if len(parts) != 3:
+                    send_message(chat_id, "❌ Неверный формат. Используйте: price_TYPE_ЧИСЛО")
+                    return
+                
+                price_type = parts[1]
+                new_price = int(parts[2])
+                
+                if new_price <= 0:
+                    send_message(chat_id, "❌ Цена должна быть больше 0")
+                    return
+                
+                if price_type not in ['bag', 'daily', 'alternate']:
+                    send_message(chat_id, "❌ Неверный тип цены. Используйте: bag, daily или alternate")
+                    return
+                
+                handle_update_price(chat_id, price_type, new_price, conn)
+            except (ValueError, IndexError):
+                send_message(chat_id, "❌ Неверный формат. Используйте: price_TYPE_ЧИСЛО")
         else:
             send_message(chat_id, "❌ Доступ запрещен")
         return
