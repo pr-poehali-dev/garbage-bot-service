@@ -2206,7 +2206,7 @@ def handle_message(message: Dict, conn) -> None:
             try:
                 import requests
                 payment_response = requests.post(
-                    'https://functions.poehali.dev/32a57b72-d077-4b28-957b-013b624def6c/yoomoney-create-payment',
+                    'https://functions.poehali.dev/b4b440af-a2f4-4b49-86be-5c7dafb0762d',
                     json={
                         'amount': total_price,
                         'description': f"Заказ #{order_id}: Вывоз мусора ({bag_count} мешков)",
