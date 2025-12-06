@@ -101,22 +101,13 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         if result:
             client_id, address, bag_count, price = result
             
-            cursor.execute(
-                f"SELECT telegram_id FROM {SCHEMA}.clients WHERE id = %s",
-                (client_id,)
-            )
-            telegram_result = cursor.fetchone()
+            message = f"✅ <b>Оплата прошла успешно!</b>\n\n"
+            message += f"📦 Заказ #{order_id}\n"
+            message += f"🗑 Мешков: {bag_count}\n"
+            message += f"📍 Адрес: {address}\n\n"
+            message += "Курьер скоро свяжется с вами для согласования времени вывоза."
             
-            if telegram_result:
-                telegram_id = telegram_result[0]
-                
-                message = f"✅ <b>Оплата прошла успешно!</b>\n\n"
-                message += f"📦 Заказ #{order_id}\n"
-                message += f"🗑 Мешков: {bag_count}\n"
-                message += f"📍 Адрес: {address}\n\n"
-                message += "Курьер скоро свяжется с вами для согласования времени вывоза."
-                
-                send_telegram_message(telegram_id, message)
+            send_telegram_message(client_id, message)
             
             cursor.execute(
                 f"SELECT telegram_id FROM {SCHEMA}.users WHERE role = %s",
