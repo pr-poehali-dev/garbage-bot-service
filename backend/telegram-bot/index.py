@@ -733,7 +733,7 @@ def handle_client_active_orders(chat_id: int, telegram_id: int, conn) -> None:
             if courier_id:
                 order_buttons.append({'text': f'💬 Чат', 'callback_data': f'client_chat_{order_id}'})
             
-            if detailed_status == 'searching_courier':
+            if detailed_status in ['waiting_payment', 'searching_courier']:
                 order_buttons.append({'text': f'❌ Отменить', 'callback_data': f'cancel_order_{order_id}'})
             
             if order_buttons:
@@ -767,7 +767,7 @@ def handle_cancel_order(chat_id: int, telegram_id: int, order_id: int, conn) -> 
         send_message(chat_id, "❌ Это не ваш заказ")
         return
     
-    if status != 'pending' or detailed_status != 'searching_courier':
+    if status != 'pending' or detailed_status not in ['waiting_payment', 'searching_courier']:
         cursor.close()
         send_message(chat_id, "❌ Заказ уже принят курьером и не может быть отменен")
         return
